@@ -111,16 +111,26 @@ const {
   openGithub
 } = useAppState()
 
-// 初始化主题管理器（全局单例内部已自动调用 initialize）
+// 初始化主题管理器
 const themeManager = useGlobalThemeManager()
-
-
 </script>
 
 <style scoped>
 /* 导入原来的样式 */
 @import './styles/components/layout/app-layout.css';
 @import './styles/components/notifications.css';
+</style>
 
-
+<style>
+.app-container {
+  display: flex;
+  gap: 16px;
+  padding: 16px;
+}
+.file-manager {
+  width: 300px;
+}
+.editor-container {
+  flex: 1;
+}
 </style>

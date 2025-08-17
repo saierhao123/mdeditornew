@@ -15,6 +15,7 @@
  * 5.  **滚动同步**: 监听编辑器的滚动事件，并以百分比形式通知父组件，
  *     用于实现编辑器与预览窗格的同步滚动。
  * 6.  **生命周期管理**: 在组件挂载时初始化编辑器，在卸载时销毁，防止内存泄漏。
+ * 7.  **自动保存**: 每10秒自动保存内容到本地存储
  *
  * 设计思想:
  * - **关注点分离**: 将复杂的 CodeMirror 配置和 API 操作封装在此 Composable 中，
@@ -31,6 +32,8 @@ import { useEditorTheme } from './useEditorTheme.js'
 import { useEditorOperations } from './useEditorOperations.js'
 import { useEditorLifecycle } from './useEditorLifecycle.js'
 import { useThemeWatcher } from '../theme/useThemeWatcher.js'
+import { AutoSaveManager } from '../../core/editor/auto-save.js'; // 导入自动保存管理器
+import { onMounted, onUnmounted, ref } from 'vue'; // 导入Vue生命周期钩子
 
 /**
  * 创建并管理一个 Markdown 编辑器实例。
@@ -74,6 +77,90 @@ export function useMarkdownEditor(options = {}) {
   // 设置主题监听
   const watchers = themeWatcher.setupThemeWatchers()
 
+  // --- 自动保存功能实现 ---
+  const autoSaveManager = ref(null); // 自动保存管理器实例
+
+  // 初始化自动保存
+  const initAutoSave = () => {
+    // 创建自动保存实例（传入编辑器视图获取方法）
+    autoSaveManager.value = new AutoSaveManager({
+      getEditorView: editorState.getEditorView,
+      getContent: () => editorState.content.value
+    });
+    autoSaveManager.value.start(); // 启动自动保存
+  };
+
+  // 组件挂载时初始化自动保存
+  onMounted(() => {
+    // 等待编辑器初始化完成后再启动自动保存
+    const checkEditorReady = setInterval(() => {
+      if (editorState.isInitialized.value) {
+        initAutoSave();
+        clearInterval(checkEditorReady);
+      }
+    }, 100);
+  });
+
+  // 组件卸载时停止自动保存
+  onUnmounted(() => {
+    autoSaveManager.value?.stop();
+  });
+
+  // --- 文件管理相关方法 ---
+  const fileManager = {
+    // 获取所有保存的文件
+    getSavedFiles: () => {
+      const files = localStorage.getItem('md_editor_files');
+      return files ? JSON.parse(files) : {};
+    },
+    // 新建文件
+    createNewFile: (fileName) => {
+      const timestamp = new Date().getTime();
+      const name = fileName || `未命名文件_${timestamp}`;
+      editorLifecycle.updateContent(''); // 清空编辑器
+      autoSaveManager.value?.setFileName(name); // 设置新文件名
+      autoSaveManager.value?.save(); // 立即保存
+      return name;
+    },
+    // 打开文件
+    openFile: (fileName) => {
+      const files = fileManager.getSavedFiles();
+      if (files[fileName]) {
+        editorLifecycle.updateContent(files[fileName].content); // 加载文件内容
+        autoSaveManager.value?.setFileName(fileName); // 更新当前文件名
+      }
+    },
+    // 重命名文件
+    renameFile: (oldName, newName) => {
+      if (oldName === newName) return false;
+      
+      const files = fileManager.getSavedFiles();
+      if (!files[oldName]) return false;
+      
+      // 复制旧文件数据到新文件名
+      files[newName] = { ...files[oldName], saveTime: new Date().toISOString() };
+      delete files[oldName]; // 删除旧文件
+      
+      localStorage.setItem('md_editor_files', JSON.stringify(files));
+      
+      // 如果重命名的是当前文件，更新自动保存管理器的文件名
+      if (autoSaveManager.value?.getFileName() === oldName) {
+        autoSaveManager.value?.setFileName(newName);
+      }
+      return true;
+    },
+    // 删除文件
+    deleteFile: (fileName) => {
+      const files = fileManager.getSavedFiles();
+      if (files[fileName]) {
+        delete files[fileName];
+        localStorage.setItem('md_editor_files', JSON.stringify(files));
+        return true;
+      }
+      return false;
+    }
+  };
+
   // --- 返回 API ---
 
   return {
@@ -98,10 +185,17 @@ export function useMarkdownEditor(options = {}) {
     // 来自 editorOperations 的工具栏操作
     ...editorOperations,
 
+    // 自动保存与文件管理
+    autoSaveManager,
+    fileManager,
+
     // 实例访问 (用于高级操作)
     getEditorView: editorState.getEditorView,
 
     // 清理方法（用于手动清理时使用）
-    cleanup: () => themeWatcher.cleanupWatchers(watchers)
+    cleanup: () => {
+      themeWatcher.cleanupWatchers(watchers);
+      autoSaveManager.value?.stop(); // 清理时停止自动保存
+    }
   }
 }
